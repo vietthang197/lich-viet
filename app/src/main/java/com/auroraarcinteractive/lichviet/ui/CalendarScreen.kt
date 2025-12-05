@@ -25,7 +25,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.auroraarcinteractive.lichviet.R
+import com.auroraarcinteractive.lichviet.data.HolidayType
 import com.auroraarcinteractive.lichviet.data.LunarSpecialDays
+import com.auroraarcinteractive.lichviet.data.VietnameseHolidays
 import com.auroraarcinteractive.lichviet.ui.theme.HolidayHighlight
 import com.auroraarcinteractive.lichviet.ui.theme.LunarText
 import com.auroraarcinteractive.lichviet.ui.theme.TodayHighlight
@@ -36,14 +38,17 @@ import java.time.LocalDate
 import java.time.YearMonth
 
 /**
- * CalendarScreen - Màn hình chính hiển thị lịch Việt
+ * CalendarScreen - Màn hình lịch Việt Nam
  *
  * Features:
- * - Lịch dương + âm lịch
- * - Hiển thị ngày lễ chính xác
- * - Đánh dấu Mùng 1 & Rằm âm lịch (chấm đỏ)
- * - Light/Dark theme
- * - Responsive UI
+ * ✅ Lịch dương + âm lịch
+ * ✅ Đánh dấu 4 loại ngày:
+ *    1. LUNAR_SPECIAL: Mùng 1/1 & Rằm/8 âm lịch (Chấm đỏ lớn)
+ *    2. LUNAR_HOLIDAY: Tết, Vu Lan, Trung Thu, Phật (Chấm đỏ nhỏ)
+ *    3. VIETNAM_HOLIDAY: 30/4, 1/9, 27/7 (Chấm đỏ nhỏ)
+ *    4. INTERNATIONAL_HOLIDAY: 1/1, 25/12 (Chấm vàng/cam)
+ * ✅ Light/Dark theme
+ * ✅ Responsive UI
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,12 +75,10 @@ fun CalendarScreen(
                 .padding(paddingValues)
                 .padding(horizontal = 8.dp)
         ) {
-            // Header thứ trong tuần
             DaysOfWeekHeader()
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Grid lịch
             LazyVerticalGrid(
                 columns = GridCells.Fixed(7),
                 contentPadding = PaddingValues(4.dp),
@@ -95,7 +98,6 @@ fun CalendarScreen(
         }
     }
 
-    // Bottom sheet cho chi tiết ngày
     selectedDate?.let { date ->
         DayDetailBottomSheet(
             date = date,
@@ -104,9 +106,6 @@ fun CalendarScreen(
     }
 }
 
-/**
- * Top bar với navigation và title tháng/năm
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarTopBar(
@@ -145,9 +144,6 @@ fun CalendarTopBar(
     )
 }
 
-/**
- * Header hiển thị các thứ trong tuần
- */
 @Composable
 fun DaysOfWeekHeader() {
     Row(
@@ -184,14 +180,54 @@ fun DaysOfWeekHeader() {
 }
 
 /**
- * Ô ngày trong lịch
- *
- * Hiển thị:
- * - Ngày dương (to, rõ)
- * - Ngày âm (nhỏ, dưới)
- * - Đánh dấu ngày hôm nay
- * - Đánh dấu ngày lễ
- * - Đánh dấu Mùng 1 & Rằm âm lịch (chấm đỏ)
+ * Enum để phân loại loại ngày đặc biệt
+ */
+enum class SpecialDayType {
+    NONE,                    // Ngày thường
+    LUNAR_SPECIAL,          // Mùng 1/1 & Rằm/8 âm lịch
+    LUNAR_HOLIDAY,          // Tết, Vu Lan, Trung Thu, Phật
+    VIETNAM_HOLIDAY,        // 30/4, 1/9, 27/7
+    INTERNATIONAL_HOLIDAY   // 1/1, 25/12
+}
+
+/**
+ * Xác định loại ngày đặc biệt - HÀM HELPER (không phải Composable)
+ * Có thể dùng try-catch ở đây
+ */
+fun getSpecialDayType(date: LocalDate): SpecialDayType {
+    return try {
+        val lunarDate = date.toLunar()
+
+        // 1. Kiểm tra Mùng 1 Tháng 1 & Rằm Tháng 8
+        if (LunarSpecialDays.isSpecialDay(lunarDate.day, lunarDate.month, lunarDate.year)) {
+            return SpecialDayType.LUNAR_SPECIAL
+        }
+
+        // 2. Kiểm tra ngày lễ âm lịch khác (Tết, Vu Lan, Trung Thu, Phật)
+        if (VietnameseHolidays.isLunarHoliday(lunarDate.day, lunarDate.month)) {
+            return SpecialDayType.LUNAR_HOLIDAY
+        }
+
+        // 3. Kiểm tra ngày lễ dương lịch Việt Nam
+        if (VietnameseHolidays.isHoliday(date.monthValue, date.dayOfMonth)) {
+            val holidayType = VietnameseHolidays.getHolidayType(date.monthValue, date.dayOfMonth)
+            return when (holidayType) {
+                HolidayType.VIETNAMESE_HOLIDAY, HolidayType.COMMEMORATION_DAY ->
+                    SpecialDayType.VIETNAM_HOLIDAY
+                HolidayType.INTERNATIONAL_HOLIDAY ->
+                    SpecialDayType.INTERNATIONAL_HOLIDAY
+                else -> SpecialDayType.NONE
+            }
+        }
+
+        SpecialDayType.NONE
+    } catch (e: Exception) {
+        SpecialDayType.NONE  // Fallback an toàn
+    }
+}
+
+/**
+ * Ô ngày trong lịch - COMPOSABLE
  */
 @Composable
 fun DayCell(
@@ -200,19 +236,26 @@ fun DayCell(
     isInCurrentMonth: Boolean,
     onClick: () -> Unit
 ) {
-    val lunarDate = remember(date) { date.toLunar() }
-    val isHoliday = remember(date) { date.isHoliday() }
+    // ✅ Tính toán TRƯỚC khi render (outside composable)
     val isWeekend = remember(date) { date.isWeekend() }
+    val specialDayType = remember(date) { getSpecialDayType(date) }
 
-    // Kiểm tra Mùng 1 & Rằm âm lịch
-    val isLunarSpecialDay = remember(lunarDate) {
-        LunarSpecialDays.isSpecialDay(lunarDate.day, lunarDate.month, lunarDate.year)
+    // ✅ Lấy lunar date TRƯỚC khi render
+    val lunarDate = remember(date) {
+        try {
+            date.toLunar()
+        } catch (e: Exception) {
+            null  // Fallback
+        }
     }
 
-    // Màu nền dựa trên tính chất của ngày
+    // Màu nền
     val backgroundColor = when {
         isToday -> TodayHighlight.copy(alpha = 0.15f)
-        isHoliday -> HolidayHighlight.copy(alpha = 0.12f)
+        specialDayType == SpecialDayType.LUNAR_SPECIAL -> HolidayHighlight.copy(alpha = 0.12f)
+        specialDayType == SpecialDayType.LUNAR_HOLIDAY -> HolidayHighlight.copy(alpha = 0.12f)
+        specialDayType == SpecialDayType.VIETNAM_HOLIDAY -> HolidayHighlight.copy(alpha = 0.12f)
+        specialDayType == SpecialDayType.INTERNATIONAL_HOLIDAY -> Color(0xFFFFD700).copy(alpha = 0.08f)
         else -> Color.Transparent
     }
 
@@ -250,47 +293,66 @@ fun DayCell(
                 color = when {
                     !isInCurrentMonth -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
                     isToday -> TodayHighlight
-                    isHoliday -> HolidayHighlight
+                    specialDayType == SpecialDayType.LUNAR_SPECIAL -> HolidayHighlight
+                    specialDayType == SpecialDayType.LUNAR_HOLIDAY -> HolidayHighlight
+                    specialDayType == SpecialDayType.VIETNAM_HOLIDAY -> HolidayHighlight
+                    specialDayType == SpecialDayType.INTERNATIONAL_HOLIDAY -> Color(0xFFFFA500)
                     isWeekend -> WeekendText
                     else -> MaterialTheme.colorScheme.onSurface
                 }
             )
 
-            // Ngày âm (rút gọn)
-            val lunarDayText = if (lunarDate.day == 1) {
-                "${lunarDate.day}/${lunarDate.month}"
-            } else {
-                lunarDate.day.toString()
+            // Ngày âm
+            if (lunarDate != null) {
+                val lunarDayText = if (lunarDate.day == 1) {
+                    "${lunarDate.day}/${lunarDate.month}"
+                } else {
+                    lunarDate.day.toString()
+                }
+
+                Text(
+                    text = lunarDayText,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    color = if (isInCurrentMonth) {
+                        LunarText
+                    } else {
+                        LunarText.copy(alpha = 0.2f)
+                    }
+                )
             }
 
-            Text(
-                text = lunarDayText,
-                style = MaterialTheme.typography.labelSmall,
-                fontSize = 9.sp,
-                color = if (isInCurrentMonth) {
-                    LunarText
-                } else {
-                    LunarText.copy(alpha = 0.2f)
-                }
-            )
-
-            // Chấm báo hiệu ngày lễ hoặc Mùng 1 / Rằm
-            if ((isHoliday || isLunarSpecialDay) && isInCurrentMonth) {
+            // Chấm báo hiệu ngày đặc biệt
+            if (specialDayType != SpecialDayType.NONE && isInCurrentMonth) {
                 Spacer(modifier = Modifier.height(1.dp))
+
+                val dotSize = when (specialDayType) {
+                    SpecialDayType.LUNAR_SPECIAL -> 4.dp
+                    SpecialDayType.LUNAR_HOLIDAY -> 3.dp
+                    SpecialDayType.VIETNAM_HOLIDAY -> 3.dp
+                    SpecialDayType.INTERNATIONAL_HOLIDAY -> 3.dp
+                    else -> 2.dp
+                }
+
+                val dotColor = when (specialDayType) {
+                    SpecialDayType.LUNAR_SPECIAL -> HolidayHighlight
+                    SpecialDayType.LUNAR_HOLIDAY -> HolidayHighlight
+                    SpecialDayType.VIETNAM_HOLIDAY -> HolidayHighlight
+                    SpecialDayType.INTERNATIONAL_HOLIDAY -> Color(0xFFFFA500)
+                    else -> HolidayHighlight
+                }
+
                 Box(
                     modifier = Modifier
-                        .size(3.dp)
+                        .size(dotSize)
                         .clip(CircleShape)
-                        .background(HolidayHighlight)  // Màu đỏ
+                        .background(dotColor)
                 )
             }
         }
     }
 }
 
-/**
- * Helper function - Lấy text tháng/năm
- */
 @Composable
 fun getMonthYearText(yearMonth: YearMonth): String {
     val monthResId = when (yearMonth.monthValue) {
